@@ -17,11 +17,13 @@
 
 importClass(Packages.ij.IJ);
 importClass(Packages.ij.ImagePlus);
+importClass(Packages.ij.ImageListener);
 importClass(Packages.ij.process.ImageProcessor);
 importClass(Packages.ij.plugin.EventListener);
 importClass(Packages.ij.gui.Overlay);
 importClass(Packages.ij.gui.NonBlockingGenericDialog);
 importClass(Packages.ij.gui.Roi);
+importClass(Packages.ij.gui.OvalRoi);
 
 importClass(Packages.java.awt.Panel);
 importClass(Packages.java.awt.GridBagLayout);
@@ -58,7 +60,6 @@ createGUI = function()
 	gd.setOKLabel("Close");
 
     pan.setLayout(new GridBagLayout());
-//	pan.setBackground(Color.darkGray);
 
 	addComponent(pan, new Label("ROI tracker v." + ROI_tracker_version, Label.CENTER), 0, 0, 2);
 	bt = new Button("Add ROI");
@@ -67,11 +68,21 @@ createGUI = function()
 	bt = new Button("Remove ROI");
 	bt.addActionListener(removeROI);
   	addComponent(pan, bt, 1, 1, 1);
-	bt = new Button("Track ROI");
-	bt.addActionListener(trackROI);
+	bt = new Button("Add keyframe");
+	bt.addActionListener(addKFROI);
   	addComponent(pan, bt, 0, 2, 1);
-	addComponent(pan, ROIList, 0, 3, 2); 
+	bt = new Button("Rem keyframe");
+	//bt.addActionListener(remKFROI);
+  	addComponent(pan, bt, 1, 2, 1);
+	bt = new Button("Multi-measure");
+	bt.addActionListener(multiMeasure);
+  	addComponent(pan, bt, 0, 3, 2);
+
+  	ROIList = new List(10, 0);
+	ROIList.addItemListener(listListener);
+	addComponent(pan, ROIList, 0, 4, 2); 
 	gd.add(pan);
+	gd.addWindowListener(GUIListener);
 
   	gd.showDialog(); //show it
 	}
@@ -81,27 +92,23 @@ drawROIs = function()
 	{
 	var overlay = new Overlay();
 	var s = im.getCurrentSlice();
+  	var num = ROIList.getSelectedIndex();
   	
    	for (i=0; i<ROIs.length; i++)
    		{
-   		ROIs[i][s].setStrokeColor(Color.red);
-		overlay.add(ROIs[i][s]);
-   		}
-
-   	im.setOverlay(overlay);
-	}
-
-// Highlights a ROI
-highlightROI = function(num)
-	{
-	var overlay = new Overlay();
-	var s = im.getCurrentSlice();
-  
-   	for (i=0; i<ROIs.length; i++)
-   		{
-   		(i == num) ? ROIs[i][s].setStrokeColor(Color.green) :
-   			ROIs[i][s].setStrokeColor(Color.red);
-		overlay.add(ROIs[i][s]);
+   		var r = getROI(i, s);
+   		if (i == num)
+   			{
+   			r.setStrokeColor(Color.magenta);
+   			im.setRoi(r);
+			r.setStrokeColor(Color.gray);
+			overlay.add(r);	
+   			}
+   		else
+   			{
+			r.setStrokeColor(Color.red);
+			overlay.add(r);	
+   			}	   			
    		}
 
    	im.setOverlay(overlay);
@@ -126,55 +133,110 @@ getROIPixels = function(ROI)
 	return pix;
 	}
 
-// Calculate Pearson's correlation coefficient
-pearson = function(a1, a2)
+getROI = function(num, slice)
 	{
-	if (a1.length != a2.length)
+	if (ROIs[num][slice] != null)
+		return ROIs[num][slice];
+	else
 		{
-		IJ.showMessage("Cannot calculate correlation");
-		return null;
+		var prevROI = null, nextROI = null, prevSlice = 1, nextSlice = im.getStackSize();
+		
+		// Find previous and next ROI
+		for (s = slice; s>0; s--) // slices are 1-based!
+			{
+			if (ROIs[num][s] != null)
+				{
+				prevROI = ROIs[num][s];
+				prevSlice = s;
+				break;
+				}
+			}
+		for (s = slice; s<=im.getStackSize(); s++)
+			{
+			if (ROIs[num][s] != null)
+				{
+				nextROI = ROIs[num][s];
+				nextSlice = s;
+				break;
+				}
+			}
+
+		if (nextROI != null && prevROI != null)
+			return interpolateROI(prevROI, nextROI, (slice - prevSlice) / (nextSlice - prevSlice));
+		else if (nextROI == null)
+			return prevROI;
+		else
+			return nextROI; 
+		}
+	}
+
+interpolateROI = function(ROI1, ROI2, weight)
+	{
+	var bnd1 = ROI1.getBounds();
+	var bnd2 = ROI2.getBounds();
+	var newROI;
+
+	if (ROI1.getType() != ROI2.getType())
+		{
+		IJ.showMessage("ROIs need to be of the same type!");
+		return;
 		}
 
-	var mean1 = 0;
-	var mean2 = 0;
-	var i;
+	if (ROI1.getType() == 0) // Rectangular ROI
+		{
+		newROI = new Roi((1.0-weight) * bnd1.x + weight * bnd2.x,
+						 (1.0-weight) * bnd1.y + weight * bnd2.y,
+						 (1.0-weight) * bnd1.width + weight * bnd2.width,
+						 (1.0-weight) * bnd1.height + weight * bnd2.height);
+		}
+	else if (ROI1.getType() == 1) // Oval ROI
+		{
+		newROI = new OvalRoi((1.0-weight) * bnd1.x + weight * bnd2.x,
+						 (1.0-weight) * bnd1.y + weight * bnd2.y,
+						 (1.0-weight) * bnd1.width + weight * bnd2.width,
+						 (1.0-weight) * bnd1.height + weight * bnd2.height);
+		}
+	else if (ROI1.getType() == 2) // Polygonal ROI
+		{
+		newROI = ROI1;
+		}
+		
+	return newROI;
+	}
 	
-	for (i=0; i<a1.length; i++)
-		{
-		mean1 += a1[i];
-		mean2 += a2[i];	
-		}
-
-	mean1 /= a1.length;
-	mean2 /= a2.length;
-
-	var cor = 0;
-	var sumsq1 = 0;
-	var sumsq2 = 0;
-	for (i=0; i<a1.length; i++)
-		{
-		cor += (a1[i] - mean1) * (a2[i] - mean2);
-	    sumsq1 += (a1[i] - mean1) * (a1[i] - mean1);
-	    sumsq2 += (a2[i] - mean2) * (a2[i] - mean2); 
-		}
-
-	cor /= Math.sqrt(sumsq1) * Math.sqrt(sumsq2);
-
-	return(cor);
-	}
-
-moveROI = function(originalROI, xoff, yoff)
-	{
-	var bnd = originalROI.getBounds();
-
-	var offsetROI = new Roi(bnd.x + xoff, bnd.y + yoff, bnd.width, bnd.height);
-
-	return(offsetROI);
-	}
-
 /*********************/
 /* Action listeners */
 /********************/
+
+// Listener for the ROI list
+var listListener = new java.awt.event.ItemListener(
+	{
+	itemStateChanged : function(e)
+		{
+		drawROIs();
+		}
+	});
+
+// Listener for the main GUI
+var GUIListener = new java.awt.event.WindowListener(
+	{
+	windowOpened: function(e)
+		{
+		ImagePlus.addImageListener(imageListener);
+		},	
+	windowClosed: function(e)
+		{
+		ImagePlus.removeImageListener(imageListener);
+		im.setHideOverlay(true);
+		im.deleteRoi();
+		},
+	windowClosing: function(e){},
+	windowActivated: function(e){},
+	windowDeactivated: function(e){},
+	windowIconified: function(e){},
+	windowDeiconified: function(e){}
+	});
+	
 
 // Adds a ROI to the ROI list
 var addROI = new java.awt.event.ActionListener(
@@ -182,18 +244,22 @@ var addROI = new java.awt.event.ActionListener(
 	actionPerformed : function (e)
 		{
 		var currentROI = im.getRoi();
-
+					
 		if (currentROI == null)
 			{
 			IJ.showMessage("Draw a ROI first!");
 			return;
 			}
+		else if (currentROI.getType == 2) // Polygonal ROI
+			{
+			IJ.showMessage("Polygonal ROIs not supported (yet)!");
+			return;			
+			}
+
 		else
 			{
 			ROIs[ROIs.length] = Array();
-			for (var slice=1; slice<=im.getStackSize(); slice++)
-				ROIs[ROIs.length-1][slice] = currentROI; // Add the current ROI for all the frames
-
+			ROIs[ROIs.length-1][im.getCurrentSlice()] = currentROI;
 			ROIList.add("ROI " + nextROIID + " - " + currentROI.getTypeAsString());
 			nextROIID++;
 			}
@@ -215,7 +281,7 @@ var removeROI = new java.awt.event.ActionListener(
 		}
 	})
 
-var trackROI = new java.awt.event.ActionListener(
+var addKFROI = new java.awt.event.ActionListener(
 	{
 	actionPerformed : function (e)
 		{
@@ -227,41 +293,25 @@ var trackROI = new java.awt.event.ActionListener(
 			}
 		else
 			{
-			highlightROI(sel);
-			var maxOffset = 3;
-			for (var slice=2; slice<=im.getStackSize(); slice++)
-				{
-				var pixels = getROIPixels(ROIs[sel][slice]);
-				
-				im.setSlice(slice);
-				im.updateAndDraw();
-				var bestcorr = -1.0;
-				var bestx = 0;
-				var besty = 0;
-				
-				for (var xoff=-maxOffset; xoff<=maxOffset; xoff++)
-					{
-					for(var yoff=-maxOffset; yoff<=maxOffset; yoff++)
-						{
-						var offROI = moveROI(ROIs[sel][slice], xoff, yoff);
-						var pixels2 = getROIPixels(offROI);
-						var corr = pearson(pixels, pixels2);
-						if (corr > bestcorr)
-							{
-							bestx = xoff;
-							besty = yoff;
-							bestcorr = corr;
-							}
-						}
-					}
+			var slice = im.getCurrentSlice();
+			
+			ROIs[sel][slice] = im.getRoi();
+			}
 
-				if ((bestx != 0) || (besty != 0))
-					{
-					ROIs[sel][slice] = moveROI(ROIs[sel][slice], bestx, besty);
-					drawROIs();
-					}
-					
-				print("Best correlation at [" + bestx + ", " + besty + "] - " + bestcorr);
+		drawROIs();
+		}
+	})	
+
+var multiMeasure = new java.awt.event.ActionListener(
+	{
+	actionPerformed : function (e)
+		{
+//		for (var num=0; num=ROIs.length; num++)
+			{
+			for (var s=1; s<=im.getStackSize(); s++)
+				{
+				im.setRoi(getROI(0, s))
+				IJ.run("Measure");
 				}
 			}
 		}
@@ -270,8 +320,33 @@ var trackROI = new java.awt.event.ActionListener(
 var im = new ImagePlus();
 im = IJ.getImage();
 
+imageListener = new ImageListener()
+	{
+    imageOpened : function(img)
+    	{
+        //print("Image opened: "+img);
+     	},
+
+     imageClosed : function(img)
+     	{
+     	print(img);
+     	if (img == im)
+			{
+			ImagePlus.removeImageListener(imageListener);
+			}    
+     	},
+     	
+     imageUpdated : function(img) 
+     	{
+     	if (img == im)
+     		{
+	       	drawROIs();
+     		}
+     	}
+ 	};
+
 var ROIs = Array();
-var ROIList = new List(10, 0);
+var ROIList;
 var nextROIID = 1;
 
 var ROI_tracker_version = "0.1";
