@@ -330,13 +330,13 @@ var multiMeasure = new java.awt.event.ActionListener(
 		
 		for (var num=0; num<ROIs.length; num++)
 			{
-			
 			for (var s=1; s<=im.getStackSize(); s++)
 				{
 				im.setSlice(s);
 				im.setRoi(getROI(num, s));
 				var stats = im.getAllStatistics();
-				rt.addValue("Cell " + num, s, stats.mean);
+	print(stats.mean);			
+				rt.setValue("Cell " + num-1, s, stats.mean);
 				}
 			}
 			rt.show("Results");
