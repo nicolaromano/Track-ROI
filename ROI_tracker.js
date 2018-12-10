@@ -1,5 +1,5 @@
 /*********************************************************************************/ 
-/* Copyright 2017 Nicola Romano (romano.nicola@gmail.com)                        */
+/* Copyright 2018 Nicola Romano (romano.nicola@gmail.com)                        */
 /*                                                                               */
 /* This program is free software; you can redistribute it and/or modify          */
 /* it under the terms of the GNU General Public License, version 3, as           */
@@ -24,6 +24,8 @@ importClass(Packages.ij.gui.Overlay);
 importClass(Packages.ij.gui.NonBlockingGenericDialog);
 importClass(Packages.ij.gui.Roi);
 importClass(Packages.ij.gui.OvalRoi);
+importClass(Packages.ij.gui.PolygonRoi);
+importClass(Packages.ij.measure.ResultsTable);
 
 importClass(Packages.java.awt.Panel);
 importClass(Packages.java.awt.GridBagLayout);
@@ -33,6 +35,7 @@ importClass(Packages.java.awt.Button);
 importClass(Packages.java.awt.Label);
 importClass(Packages.java.awt.List);
 importClass(Packages.java.awt.Color);
+importClass(Packages.java.awt.Polygon);
 
 // Adds a component to a container
 addComponent = function(container, component, posx, posy, width)
@@ -136,7 +139,9 @@ getROIPixels = function(ROI)
 getROI = function(num, slice)
 	{
 	if (ROIs[num][slice] != null)
+		{
 		return ROIs[num][slice];
+		}
 	else
 		{
 		var prevROI = null, nextROI = null, prevSlice = 1, nextSlice = im.getStackSize();
@@ -198,7 +203,18 @@ interpolateROI = function(ROI1, ROI2, weight)
 		}
 	else if (ROI1.getType() == 2) // Polygonal ROI
 		{
-		newROI = ROI1;
+		p1 = ROI1.getPolygon();
+		p2 = ROI2.getPolygon();
+
+		p3 = new Polygon();
+
+		for (i=0; i<p1.npoints; i++) // We are assuming equal number of points here
+			{
+			p3.addPoint((1.0-weight)*p1.xpoints[i] + weight*p2.xpoints[i], 
+						(1.0-weight)*p1.ypoints[i] + weight*p2.ypoints[i]);
+			}
+			
+		newROI = new PolygonRoi(p3.xpoints, p3.ypoints, p3.npoints, Roi.POLYGON);
 		}
 		
 	return newROI;
@@ -259,6 +275,9 @@ var addROI = new java.awt.event.ActionListener(
 		else
 			{
 			ROIs[ROIs.length] = Array();
+			for (var s=1; s<=im.getStackSize(); s++)			
+				ROIs[ROIs.length-1][s] = null;
+				
 			ROIs[ROIs.length-1][im.getCurrentSlice()] = currentROI;
 			ROIList.add("ROI " + nextROIID + " - " + currentROI.getTypeAsString());
 			nextROIID++;
@@ -306,14 +325,21 @@ var multiMeasure = new java.awt.event.ActionListener(
 	{
 	actionPerformed : function (e)
 		{
-//		for (var num=0; num=ROIs.length; num++)
+		var num = 0;
+		rt = new ResultsTable(im.getStackSize()+1);
+		
+		for (var num=0; num<ROIs.length; num++)
 			{
+			
 			for (var s=1; s<=im.getStackSize(); s++)
 				{
-				im.setRoi(getROI(0, s))
-				IJ.run("Measure");
+				im.setSlice(s);
+				im.setRoi(getROI(num, s));
+				var stats = im.getAllStatistics();
+				rt.addValue("Cell " + num, s, stats.mean);
 				}
 			}
+			rt.show("Results");
 		}
 	})	
 
