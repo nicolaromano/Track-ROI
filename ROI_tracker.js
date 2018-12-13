@@ -25,7 +25,12 @@ importClass(Packages.ij.gui.NonBlockingGenericDialog);
 importClass(Packages.ij.gui.Roi);
 importClass(Packages.ij.gui.OvalRoi);
 importClass(Packages.ij.gui.PolygonRoi);
+importClass(Packages.ij.gui.YesNoCancelDialog);
 importClass(Packages.ij.measure.ResultsTable);
+importClass(Packages.ij.io.OpenDialog);
+importClass(Packages.ij.io.SaveDialog);
+importClass(Packages.ij.io.RoiEncoder);
+importClass(Packages.ij.io.RoiDecoder);
 
 importClass(Packages.java.awt.Panel);
 importClass(Packages.java.awt.GridBagLayout);
@@ -36,6 +41,16 @@ importClass(Packages.java.awt.Label);
 importClass(Packages.java.awt.List);
 importClass(Packages.java.awt.Color);
 importClass(Packages.java.awt.Polygon);
+importClass(Packages.java.io.ObjectOutputStream);
+importClass(Packages.java.io.FileOutputStream);
+importClass(Packages.java.io.FileInputStream);
+importClass(Packages.java.io.BufferedOutputStream);
+importClass(Packages.java.io.DataOutputStream);
+importClass(Packages.java.io.ByteArrayOutputStream);
+importClass(Packages.java.util.zip.ZipOutputStream);
+importClass(Packages.java.util.zip.ZipInputStream);
+importClass(Packages.java.util.zip.ZipEntry);
+importClass(Packages.java.lang.Byte);
 
 // Adds a component to a container
 addComponent = function(container, component, posx, posy, width)
@@ -58,32 +73,45 @@ createGUI = function()
 	var pan = new Panel();
     var gbc = new GridBagConstraints();
 	var bt;
+	var row = 0;
 	
    	gd.hideCancelButton();
 	gd.setOKLabel("Close");
 
     pan.setLayout(new GridBagLayout());
 
-	addComponent(pan, new Label("ROI tracker v." + ROI_tracker_version, Label.CENTER), 0, 0, 2);
-	bt = new Button("Add ROI");
+	
+	addComponent(pan, new Label("ROI tracker v." + ROI_tracker_version, Label.CENTER), 0, row, 2);
+    
+    addComponent(pan, new Label("ROI", Label.LEFT), 0, ++row, 2);
+    bt = new Button("    Add    ");
 	bt.addActionListener(addROI);
-  	addComponent(pan, bt, 0, 1, 1); 
-	bt = new Button("Remove ROI");
+  	addComponent(pan, bt, 0, ++row, 1); 
+	bt = new Button("Remove");
 	bt.addActionListener(removeROI);
-  	addComponent(pan, bt, 1, 1, 1);
-	bt = new Button("Add keyframe");
+  	addComponent(pan, bt, 1, row, 1);
+    bt = new Button("  Save  ");
+	bt.addActionListener(saveROIs);
+  	addComponent(pan, bt, 0, ++row, 1); 
+	bt = new Button("  Load  ");
+	bt.addActionListener(loadROIs);
+  	addComponent(pan, bt, 1, row, 1);
+
+	addComponent(pan, new Label("Keyframe", Label.LEFT), 0, ++row, 2);
+	bt = new Button("   Add   ");
 	bt.addActionListener(addKFROI);
-  	addComponent(pan, bt, 0, 2, 1);
-	bt = new Button("Rem keyframe");
-	//bt.addActionListener(remKFROI);
-  	addComponent(pan, bt, 1, 2, 1);
+  	addComponent(pan, bt, 0, ++row, 1);
+	bt = new Button("Remove");
+	//bt.addActionListener(remKFROI);	
+  	addComponent(pan, bt, 1, row, 1);
+  	
 	bt = new Button("Multi-measure");
 	bt.addActionListener(multiMeasure);
-  	addComponent(pan, bt, 0, 3, 2);
+  	addComponent(pan, bt, 0, ++row, 2);
 
   	ROIList = new List(10, 0);
 	ROIList.addItemListener(listListener);
-	addComponent(pan, ROIList, 0, 4, 2); 
+	addComponent(pan, ROIList, 0, ++row, 2); 
 	gd.add(pan);
 	gd.addWindowListener(GUIListener);
 
@@ -94,12 +122,13 @@ createGUI = function()
 drawROIs = function()
 	{
 	var overlay = new Overlay();
-	var s = im.getCurrentSlice();
+	var s = im.getCurrentSlice()-1;
   	var num = ROIList.getSelectedIndex();
-  	
-   	for (i=0; i<ROIs.length; i++)
+  //	print(ROIs.length);
+   	for (var i=0; i<ROIs.length; i++)
    		{
    		var r = getROI(i, s);
+   		print("Showing ROI "+i+" "+r +" - selected ROI: "+num);
    		if (i == num)
    			{
    			r.setStrokeColor(Color.magenta);
@@ -147,7 +176,7 @@ getROI = function(num, slice)
 		var prevROI = null, nextROI = null, prevSlice = 1, nextSlice = im.getStackSize();
 		
 		// Find previous and next ROI
-		for (s = slice; s>0; s--) // slices are 1-based!
+		for (s = slice; s>=0; s--)
 			{
 			if (ROIs[num][s] != null)
 				{
@@ -156,7 +185,7 @@ getROI = function(num, slice)
 				break;
 				}
 			}
-		for (s = slice; s<=im.getStackSize(); s++)
+		for (s = slice; s<=im.getStackSize()-1; s++)
 			{
 			if (ROIs[num][s] != null)
 				{
@@ -219,7 +248,138 @@ interpolateROI = function(ROI1, ROI2, weight)
 		
 	return newROI;
 	}
+
+saveROIs = function()
+	{
+	if (ROIs.length == 0)
+		IJ.showMessage("There is no ROI to save...");
+	else
+		{
+		var sd = new SaveDialog("Save ROIs to file", IJ.getDirectory("image"), "ROIs", ".roi");
+		var zos = new ZipOutputStream(new BufferedOutputStream(new FileOutputStream(sd.getDirectory() + sd.getFileName())));
+		var out = new DataOutputStream(new BufferedOutputStream(zos));
+		var re = new RoiEncoder(out);
+
+		try
+			{
+			for(var r=0; r<ROIs.length; r++)
+				{
+				for(var frame = 0; frame<im.getStackSize()-1; frame++)
+					{
+					if (ROIs[r][frame] != null)
+						{
+						//print("Writing " + ROIs[r][frame]);
+						var tmp = ROIs[r][frame];
+					    zos.putNextEntry(new ZipEntry("ROI__"+r+"__Frame__"+(frame+1)+"__.roi"));
+	    				re.write(tmp);
+	 					out.flush();
+						}
+					}
+				}
+			out.close();
+			}
+		catch (e) 
+			{
+            IJ.showMessage(""+e);
+            return false;
+        	} 
+        finally 
+        	{
+            if (out!=null)
+                try {
+                	out.close();
+                	} 
+          		catch (e) {}
+        	}
+		}
+	}
+
+loadROIs = function()
+	{
+	var od = new OpenDialog("Choose a ROI file", IJ.getDirectory("image"), "*.zip");
+
+	var dir = od.getDirectory();
+	var fileName = od.getFileName();
 	
+	if (fileName == null)
+		return;
+
+	var fullName = dir + fileName;
+    var out = new ByteArrayOutputStream();
+    var nROIs = 0; 
+
+    try { 
+    	var infile = new FileInputStream(fullName);
+        var instream = new ZipInputStream(infile);
+        var entry = instream.getNextEntry();
+
+		var ByteArray = Java.type("byte[]");
+		var buf = new ByteArray(1024);
+		var len;
+        
+        ROIs = Array(); // Empty ROIs
+        nextROIID = 1;
+        ROIList.removeAll();
+        lastROI = -1;
+
+    	while (entry!=null) 
+        	{ 
+            name = entry.getName();
+            if (name.endsWith(".roi"))
+            	{ 
+                out = new ByteArrayOutputStream();
+                while ((len = instream.read(buf)) > 0) 
+                		{
+                       	out.write(buf, 0, len); 
+                		}
+             
+                out.close(); 
+                var bytes = out.toByteArray();
+                var rd = new RoiDecoder(bytes, name); 
+                var roi = rd.getRoi(); 
+                if (roi != null)
+                	{ 
+                	num = name.split("__")[1];
+                	frame = name.split("__")[3];
+                	//print("Importing ROI "+num+" - frame "+frame);
+                	// New ROI
+                	if (num != lastROI)
+                		{
+						ROIs[ROIs.length] = Array();
+						
+						for (var s=0; s<=im.getStackSize()-1; s++)
+							ROIs[ROIs.length-1][s] = null;
+
+						ROIs[ROIs.length-1][frame] = roi;
+
+						ROIList.add("ROI " + nextROIID + " - " + roi.getTypeAsString());
+						nextROIID++;
+						lastROI = num;
+                		}
+                	else // We already added this ROI. This is a new frame
+						ROIs[ROIs.length-1][frame] = roi;
+			
+                    //listModel.addElement(name); 
+	               	}
+                }
+            entry = instream.getNextEntry(); 
+            } 
+        instream.close(); 
+        } 
+   catch (e) 
+   		{
+        IJ.showMessage(e.toString());
+        }
+   finally
+   		{
+        if (instream!=null)
+           try {instream.close();} catch (e) {}
+           
+        if (out!=null)
+                try {out.close();} catch (e) {}
+        }
+	}
+
 /*********************/
 /* Action listeners */
 /********************/
@@ -263,22 +423,16 @@ var addROI = new java.awt.event.ActionListener(
 					
 		if (currentROI == null)
 			{
-			IJ.showMessage("Draw a ROI first!");
+			IJ.showMessage("Draw an ROI first!");
 			return;
 			}
-		else if (currentROI.getType == 2) // Polygonal ROI
-			{
-			IJ.showMessage("Polygonal ROIs not supported (yet)!");
-			return;			
-			}
-
 		else
 			{
 			ROIs[ROIs.length] = Array();
-			for (var s=1; s<=im.getStackSize(); s++)			
+			for (var s=0; s<=im.getStackSize()-1; s++)
 				ROIs[ROIs.length-1][s] = null;
 				
-			ROIs[ROIs.length-1][im.getCurrentSlice()] = currentROI;
+			ROIs[ROIs.length-1][im.getCurrentSlice()-1] = currentROI;
 			ROIList.add("ROI " + nextROIID + " - " + currentROI.getTypeAsString());
 			nextROIID++;
 			}
@@ -308,11 +462,11 @@ var addKFROI = new java.awt.event.ActionListener(
 
 		if (sel == -1)
 			{
-			IJ.showMessage("Select a ROI from the list first!");
+			IJ.showMessage("Select an ROI from the list first!");
 			}
 		else
 			{
-			var slice = im.getCurrentSlice();
+			var slice = im.getCurrentSlice() - 1; // Slices are 1-indexed, arrays are 0-indexed...
 			
 			ROIs[sel][slice] = im.getRoi();
 			}
@@ -330,12 +484,11 @@ var multiMeasure = new java.awt.event.ActionListener(
 		
 		for (var num=0; num<ROIs.length; num++)
 			{
-			for (var s=1; s<=im.getStackSize(); s++)
+			for (var s=0; s<=im.getStackSize()-1; s++)
 				{
-				im.setSlice(s);
+				im.setSlice(s+1);
 				im.setRoi(getROI(num, s));
 				var stats = im.getAllStatistics();
-	print(stats.mean);			
 				rt.setValue("Cell " + num-1, s, stats.mean);
 				}
 			}
@@ -345,6 +498,7 @@ var multiMeasure = new java.awt.event.ActionListener(
 
 var im = new ImagePlus();
 im = IJ.getImage();
+stk = im.getImageStack();
 
 imageListener = new ImageListener()
 	{
@@ -355,7 +509,7 @@ imageListener = new ImageListener()
 
      imageClosed : function(img)
      	{
-     	print(img);
+     	//print(img);
      	if (img == im)
 			{
 			ImagePlus.removeImageListener(imageListener);
